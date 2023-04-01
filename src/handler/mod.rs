@@ -36,6 +36,7 @@ use crate::{
     socket::{FilterConfig, Socket},
     Enr,
 };
+use async_trait::async_trait;
 use delay_map::HashMapDelay;
 use enr::{CombinedKey, NodeId};
 use futures::prelude::*;

@@ -147,7 +147,17 @@ impl RecvHandler {
             match Packet::decode::<P>(&self.node_id, &self.recv_buffer[..length]) {
                 Ok(p) => p,
                 Err(e) => {
-                    debug!("Packet decoding failed: {:?}", e); // could not decode the packet, drop it
+                    match TunnelPacket::decode::<P>(&self.recv_buffer[..length]) {
+                        Ok(packet) => {
+                            let inbound = InboundTunnelPacket(src_address, packet);
+                            self.handler.send(inbound).await.unwrap_or_else(|e| warn!("Could not send tunnel packet to handler: {}", e));
+                        },
+                        Err(tunnel_err) => {
+                            debug!("Packet decoding failed as discv5 packet and as a tunnel packet: {:?}, {:?}", e, tunnel_err);
+                            // could not decode the packet, drop it
+                            return;
+                        }
+                    }
                     return;
                 }
             };
