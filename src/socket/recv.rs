@@ -17,8 +17,27 @@ use tokio::{
     net::UdpSocket,
     sync::{mpsc, oneshot},
 };
+use tunnel::{InboundTunnelPacket, TunnelPacket};
 
 use tracing::{debug, trace, warn};
+
+pub enum Inbound {
+    Packet(InboundPacket),
+    TunnelPacket(InboundTunnelPacket),
+}
+
+macro_rules! impl_from_variant_wrap {
+    ($(<$($generic: ident$(: $trait: ident$(+ $traits: ident)*)*,)+>)*, $from_type: ty, $to_type: ty, $variant: path) => {
+        impl$(<$($generic $(: $trait $(+ $traits)*)*,)+>)* From<$from_type> for $to_type {
+            fn from(e: $from_type) -> Self {
+                $variant(e)
+            }
+        }
+    };
+}
+
+impl_from_variant_wrap!(, InboundPacket, Inbound, Self::Packet);
+impl_from_variant_wrap!(, InboundTunnelPacket, Inbound, Self::TunnelPacket);
 
 /// The object sent back by the Recv handler.
 pub struct InboundPacket {
@@ -57,7 +76,7 @@ pub(crate) struct RecvHandler {
     /// The local node id used to decrypt headers of messages.
     node_id: enr::NodeId,
     /// The channel to send the packet handler.
-    handler: mpsc::Sender<InboundPacket>,
+    handler: mpsc::Sender<Inbound>,
     /// Exit channel to shutdown the recv handler.
     exit: oneshot::Receiver<()>,
 }
@@ -66,7 +85,7 @@ impl RecvHandler {
     /// Spawns the `RecvHandler` on a provided executor.
     pub(crate) fn spawn<P: ProtocolIdentity>(
         config: RecvHandlerConfig,
-    ) -> (mpsc::Receiver<InboundPacket>, oneshot::Sender<()>) {
+    ) -> (mpsc::Receiver<Inbound>, oneshot::Sender<()>) {
         let (exit_sender, exit) = oneshot::channel();
 
         let filter_enabled = config.filter_config.enabled;
@@ -143,24 +162,28 @@ impl RecvHandler {
             return;
         }
         // Decodes the packet
-        let (packet, authenticated_data) =
-            match Packet::decode::<P>(&self.node_id, &self.recv_buffer[..length]) {
-                Ok(p) => p,
-                Err(e) => {
-                    match TunnelPacket::decode::<P>(&self.recv_buffer[..length]) {
-                        Ok(packet) => {
-                            let inbound = InboundTunnelPacket(src_address, packet);
-                            self.handler.send(inbound).await.unwrap_or_else(|e| warn!("Could not send tunnel packet to handler: {}", e));
-                        },
-                        Err(tunnel_err) => {
-                            debug!("Packet decoding failed as discv5 packet and as a tunnel packet: {:?}, {:?}", e, tunnel_err);
-                            // could not decode the packet, drop it
-                            return;
-                        }
+        let (packet, authenticated_data) = match Packet::decode::<P>(
+            &self.node_id,
+            &self.recv_buffer[..length],
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                match TunnelPacket::decode(&self.recv_buffer[..length]) {
+                    Ok(packet) => {
+                        let inbound = InboundTunnelPacket(src_address, packet);
+                        self.handler.send(inbound.into()).await.unwrap_or_else(|e| {
+                            warn!("Could not send tunnel packet to handler: {}", e)
+                        });
                     }
-                    return;
+                    Err(tunnel_err) => {
+                        debug!("Packet decoding failed as discv5 packet and as a tunnel packet: {:?}, {:?}", e, tunnel_err);
+                        // could not decode the packet, drop it
+                        return;
+                    }
                 }
-            };
+                return;
+            }
+        };
 
         // If this is not a challenge packet, we immediately know its src_id and so pass it
         // through the second filter.
@@ -186,7 +209,7 @@ impl RecvHandler {
 
         // send the filtered decoded packet to the handler.
         self.handler
-            .send(inbound)
+            .send(inbound.into())
             .await
             .unwrap_or_else(|e| warn!("Could not send packet to handler: {}", e));
     }

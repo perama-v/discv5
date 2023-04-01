@@ -33,10 +33,9 @@ use crate::{
     packet::{ChallengeData, IdNonce, MessageNonce, Packet, PacketKind, ProtocolIdentity},
     rpc::{Message, Request, RequestBody, RequestId, Response, ResponseBody},
     socket,
-    socket::{FilterConfig, Socket},
+    socket::{FilterConfig, Inbound, Socket},
     Enr,
 };
-use async_trait::async_trait;
 use delay_map::HashMapDelay;
 use enr::{CombinedKey, NodeId};
 use futures::prelude::*;
@@ -305,7 +304,12 @@ impl Handler {
                     }
                 }
                 Some(inbound_packet) = self.socket.recv.recv() => {
-                    self.process_inbound_packet::<P>(inbound_packet).await;
+                    match inbound_packet {
+                        Inbound::Packet(inbound) =>  self.process_inbound_packet::<P>(inbound).await,
+                        Inbound::TunnelPacket(inbound) => {
+                            todo!();
+                        }
+                    }
                 }
                 Some(Ok((node_address, pending_request))) = self.active_requests.next() => {
                     self.handle_request_timeout(node_address, pending_request).await;
