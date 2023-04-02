@@ -21,7 +21,7 @@ pub use filter::{
     FilterConfig,
 };
 pub use recv::{Inbound, InboundPacket};
-pub use send::OutboundPacket;
+pub use send::{Outbound, OutboundPacket};
 
 /// Convenience objects for setting up the recv handler.
 pub struct SocketConfig {
@@ -43,7 +43,7 @@ pub struct SocketConfig {
 
 /// Creates the UDP socket and handles the exit futures for the send/recv UDP handlers.
 pub struct Socket {
-    pub send: mpsc::Sender<OutboundPacket>,
+    pub send: mpsc::Sender<Outbound>,
     pub recv: mpsc::Receiver<Inbound>,
     sender_exit: Option<oneshot::Sender<()>>,
     recv_exit: Option<oneshot::Sender<()>>,

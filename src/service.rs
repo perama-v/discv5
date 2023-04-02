@@ -41,6 +41,7 @@ use rpc::*;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, task::Poll, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, trace, warn};
+use tunnel::OutboundTunnelPacket;
 
 mod ip_vote;
 mod query_info;
@@ -149,6 +150,7 @@ pub enum ServiceRequest {
     /// Sets up an event stream where the discv5 server will return various events such as
     /// discovered nodes as it traverses the DHT.
     RequestEventStream(oneshot::Sender<mpsc::Receiver<Discv5Event>>),
+    TunnelPacket(OutboundTunnelPacket),
 }
 
 use crate::discv5::PERMIT_BAN_LIST;
@@ -345,6 +347,11 @@ impl Service {
                                 error!("Failed to return the event stream channel");
                             }
                         }
+                        ServiceRequest::TunnelPacket(outbound) => {
+                            if let Err(e) = self.handler_send.send(HandlerIn::TunnelPacket(outbound)) {
+                                warn!("Failed sending outbound tunnel packet to handler, {}", e);
+                            }
+                        }
                     }
                 }
                 Some(event) = self.handler_recv.recv() => {
@@ -380,6 +387,9 @@ impl Service {
                                 warn!("RPC Request failed: id: {}, error {:?}", request_id, error);
                             }
                             self.rpc_failure(request_id, error);
+                        }
+                        HandlerOut::TunnelPacket(inbound) => {
+                            self.send_event(Discv5Event::TunnelPacket(inbound));
                         }
                     }
                 }

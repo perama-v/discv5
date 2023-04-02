@@ -33,7 +33,7 @@ use crate::{
     packet::{ChallengeData, IdNonce, MessageNonce, Packet, PacketKind, ProtocolIdentity},
     rpc::{Message, Request, RequestBody, RequestId, Response, ResponseBody},
     socket,
-    socket::{FilterConfig, Inbound, Socket},
+    socket::{FilterConfig, Inbound, Outbound, Socket},
     Enr,
 };
 use delay_map::HashMapDelay;
@@ -52,6 +52,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, trace, warn};
+use tunnel::{InboundTunnelPacket, OutboundTunnelPacket};
 
 mod active_requests;
 mod crypto;
@@ -102,6 +103,9 @@ pub enum HandlerIn {
     /// The `WhoAreYouRef` is sent out in the `HandlerOut::WhoAreYou` event and should
     /// be returned here to submit the application's response.
     WhoAreYou(WhoAreYouRef, Option<Enr>),
+
+    /// An outbound tunnel packet to be sent over discv5.
+    TunnelPacket(OutboundTunnelPacket),
 }
 
 /// Messages sent between a node on the network and `Handler`.
@@ -128,6 +132,9 @@ pub enum HandlerOut {
     ///
     /// This returns the request ID and an error indicating why the request failed.
     RequestFailed(RequestId, RequestError),
+
+    /// An inbound tunnel packet to be sent up to the app running discv5.
+    TunnelPacket(InboundTunnelPacket),
 }
 
 /// How we connected to the node.
@@ -301,13 +308,20 @@ impl Handler {
                         }
                         HandlerIn::Response(dst, response) => self.send_response::<P>(dst, *response).await,
                         HandlerIn::WhoAreYou(wru_ref, enr) => self.send_challenge::<P>(wru_ref, enr).await,
+                        HandlerIn::TunnelPacket(outbound) => {
+                            if let Err(e) = self.socket.send.send(Outbound::TunnelPacket(outbound)).await {
+                                warn!("Failed to send outbound packet {}", e)
+                            }
+                        }
                     }
                 }
                 Some(inbound_packet) = self.socket.recv.recv() => {
                     match inbound_packet {
                         Inbound::Packet(inbound) =>  self.process_inbound_packet::<P>(inbound).await,
                         Inbound::TunnelPacket(inbound) => {
-                            todo!();
+                            if let Err(e) = self.service_send.send(HandlerOut::TunnelPacket(inbound)).await {
+                                warn!("Failed to send tunnel packet up to service, {}", e)
+                            }
                         }
                     }
                 }
@@ -1181,7 +1195,12 @@ impl Handler {
             node_address,
             packet,
         };
-        if let Err(e) = self.socket.send.send(outbound_packet).await {
+        if let Err(e) = self
+            .socket
+            .send
+            .send(Outbound::Packet(outbound_packet))
+            .await
+        {
             warn!("Failed to send outbound packet {}", e)
         }
     }

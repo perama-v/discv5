@@ -34,6 +34,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
+use tunnel::{InboundTunnelPacket, OutboundTunnelPacket};
 
 #[cfg(feature = "libp2p")]
 use libp2p_core::Multiaddr;
@@ -69,6 +70,8 @@ pub enum Discv5Event {
     SocketUpdated(SocketAddr),
     /// A node has initiated a talk request.
     TalkRequest(TalkRequest),
+    /// An tunnel packet received over the discv5 network.
+    TunnelPacket(InboundTunnelPacket),
 }
 
 /// The main Discv5 Service struct. This provides the user-level API for performing queries and
@@ -501,6 +504,25 @@ impl<P: ProtocolIdentity> Discv5<P> {
             callback_recv
                 .await
                 .map_err(|e| RequestError::ChannelFailed(e.to_string()))?
+        }
+    }
+
+    /// Request a TALK message from a node, identified via the ENR.
+    pub fn tunnel_packet(
+        &self,
+        packet: OutboundTunnelPacket,
+    ) -> impl Future<Output = Result<(), RequestError>> + 'static {
+        let channel = self.clone_channel();
+
+        async move {
+            let channel = channel.map_err(|_| RequestError::ServiceNotStarted)?;
+            let event = ServiceRequest::TunnelPacket(packet);
+
+            // send the request
+            channel
+                .send(event)
+                .await
+                .map_err(|_| RequestError::ChannelFailed("Service channel closed".into()))
         }
     }
 

@@ -6,6 +6,12 @@ use tokio::{
     sync::{mpsc, oneshot},
 };
 use tracing::{debug, trace, warn};
+use tunnel::OutboundTunnelPacket;
+
+pub enum Outbound {
+    Packet(OutboundPacket),
+    TunnelPacket(OutboundTunnelPacket),
+}
 
 pub struct OutboundPacket {
     /// The destination node address
@@ -19,7 +25,7 @@ pub(crate) struct SendHandler {
     /// The UDP send socket.
     send: Arc<UdpSocket>,
     /// The channel to respond to send requests.
-    handler_recv: mpsc::Receiver<OutboundPacket>,
+    handler_recv: mpsc::Receiver<Outbound>,
     /// Exit channel to shutdown the handler.
     exit: oneshot::Receiver<()>,
 }
@@ -31,7 +37,7 @@ impl SendHandler {
     pub(crate) fn spawn<P: ProtocolIdentity>(
         executor: Box<dyn Executor>,
         send: Arc<UdpSocket>,
-    ) -> (mpsc::Sender<OutboundPacket>, oneshot::Sender<()>) {
+    ) -> (mpsc::Sender<Outbound>, oneshot::Sender<()>) {
         let (exit_send, exit) = oneshot::channel();
         let (handler_send, handler_recv) = mpsc::channel(30);
 
@@ -54,14 +60,27 @@ impl SendHandler {
         loop {
             tokio::select! {
                 Some(packet) = self.handler_recv.recv() => {
-                    let encoded_packet = packet.packet.encode::<P>(&packet.node_address.node_id);
-                    if encoded_packet.len() > MAX_PACKET_SIZE {
-                        warn!("Sending packet larger than max size: {} max: {}", encoded_packet.len(), MAX_PACKET_SIZE);
-                    }
-                    if let Err(e) = self.send.send_to(&encoded_packet, &packet.node_address.socket_addr).await {
-                        trace!("Could not send packet. Error: {:?}", e);
-                    } else {
-                        METRICS.add_sent_bytes(encoded_packet.len());
+                    match packet {
+                        Outbound::Packet(packet) => {
+                            let encoded_packet = packet.packet.encode::<P>(&packet.node_address.node_id);
+                            if encoded_packet.len() > MAX_PACKET_SIZE {
+                                warn!("Sending packet larger than max size: {} max: {}", encoded_packet.len(), MAX_PACKET_SIZE);
+                            }
+                            if let Err(e) = self.send.send_to(&encoded_packet, &packet.node_address.socket_addr).await {
+                                trace!("Could not send packet. Error: {:?}", e);
+                            } else {
+                                METRICS.add_sent_bytes(encoded_packet.len());
+                            }
+                        },
+                        Outbound::TunnelPacket(outbound) => {
+                            let OutboundTunnelPacket(dst_addr, tunnel_packet) = outbound;
+                            let encoded_packet = tunnel_packet.encode();
+                             {
+                                if let Err(e) = self.send.send_to(&encoded_packet, &dst_addr).await {
+                                    trace!("Could not send packet, {:?}", e);
+                                }
+                            }
+                        },
                     }
                 }
                 _ = &mut self.exit => {
