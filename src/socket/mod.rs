@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot};
+use tunnel::InboundTunnelPacket;
 
 mod filter;
 mod recv;
@@ -20,7 +21,7 @@ pub use filter::{
     rate_limiter::{RateLimiter, RateLimiterBuilder},
     FilterConfig,
 };
-pub use recv::{Inbound, InboundPacket};
+pub use recv::InboundPacket;
 pub use send::{Outbound, OutboundPacket};
 
 /// Convenience objects for setting up the recv handler.
@@ -44,7 +45,7 @@ pub struct SocketConfig {
 /// Creates the UDP socket and handles the exit futures for the send/recv UDP handlers.
 pub struct Socket {
     pub send: mpsc::Sender<Outbound>,
-    pub recv: mpsc::Receiver<Inbound>,
+    pub recv: mpsc::Receiver<InboundPacket>,
     sender_exit: Option<oneshot::Sender<()>>,
     recv_exit: Option<oneshot::Sender<()>>,
 }
@@ -87,7 +88,10 @@ impl Socket {
     /// Creates a UDP socket, spawns a send/recv task and returns the channels.
     /// If this struct is dropped, the send/recv tasks will shutdown.
     /// This needs to be run inside of a tokio executor.
-    pub(crate) async fn new<P: ProtocolIdentity>(config: SocketConfig) -> Result<Self, Error> {
+    pub(crate) async fn new<P: ProtocolIdentity>(
+        config: SocketConfig,
+        tunnel_send: mpsc::Sender<InboundTunnelPacket>,
+    ) -> Result<Self, Error> {
         let socket = Socket::new_socket(&config.socket_addr, config.ip_mode).await?;
 
         // Arc the udp socket for the send/recv tasks.
@@ -104,7 +108,7 @@ impl Socket {
             ban_duration: config.ban_duration,
         };
 
-        let (recv, recv_exit) = RecvHandler::spawn::<P>(recv_config);
+        let (recv, recv_exit) = RecvHandler::spawn::<P>(recv_config, tunnel_send);
         // spawn the sender handler
         let (send, sender_exit) = SendHandler::spawn::<P>(config.executor.clone(), send_udp);
 

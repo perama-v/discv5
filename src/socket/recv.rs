@@ -21,24 +21,6 @@ use tunnel::{InboundTunnelPacket, TunnelPacket};
 
 use tracing::{debug, trace, warn};
 
-pub enum Inbound {
-    Packet(InboundPacket),
-    TunnelPacket(InboundTunnelPacket),
-}
-
-macro_rules! impl_from_variant_wrap {
-    ($(<$($generic: ident$(: $trait: ident$(+ $traits: ident)*)*,)+>)*, $from_type: ty, $to_type: ty, $variant: path) => {
-        impl$(<$($generic $(: $trait $(+ $traits)*)*,)+>)* From<$from_type> for $to_type {
-            fn from(e: $from_type) -> Self {
-                $variant(e)
-            }
-        }
-    };
-}
-
-impl_from_variant_wrap!(, InboundPacket, Inbound, Self::Packet);
-impl_from_variant_wrap!(, InboundTunnelPacket, Inbound, Self::TunnelPacket);
-
 /// The object sent back by the Recv handler.
 pub struct InboundPacket {
     /// The originating socket addr.
@@ -76,16 +58,19 @@ pub(crate) struct RecvHandler {
     /// The local node id used to decrypt headers of messages.
     node_id: enr::NodeId,
     /// The channel to send the packet handler.
-    handler: mpsc::Sender<Inbound>,
+    handler: mpsc::Sender<InboundPacket>,
     /// Exit channel to shutdown the recv handler.
     exit: oneshot::Receiver<()>,
+    /// Send a tunnel packet right up to the app running discv5.
+    tunnel_send: mpsc::Sender<InboundTunnelPacket>,
 }
 
 impl RecvHandler {
     /// Spawns the `RecvHandler` on a provided executor.
     pub(crate) fn spawn<P: ProtocolIdentity>(
         config: RecvHandlerConfig,
-    ) -> (mpsc::Receiver<Inbound>, oneshot::Sender<()>) {
+        tunnel_send: mpsc::Sender<InboundTunnelPacket>,
+    ) -> (mpsc::Receiver<InboundPacket>, oneshot::Sender<()>) {
         let (exit_sender, exit) = oneshot::channel();
 
         let filter_enabled = config.filter_config.enabled;
@@ -101,6 +86,7 @@ impl RecvHandler {
             expected_responses: config.expected_responses,
             handler,
             exit,
+            tunnel_send,
         };
 
         // start the handler
@@ -170,9 +156,10 @@ impl RecvHandler {
             Err(e) => {
                 match TunnelPacket::decode(&self.recv_buffer[..length]) {
                     Ok(packet) => {
+                        // decode as tunnel packet
                         let inbound = InboundTunnelPacket(src_address, packet);
-                        self.handler.send(inbound.into()).await.unwrap_or_else(|e| {
-                            warn!("Could not send tunnel packet to handler: {}", e)
+                        self.tunnel_send.send(inbound).await.unwrap_or_else(|e| {
+                            warn!("Could not send tunnel packet to app: {}", e)
                         });
                     }
                     Err(tunnel_err) => {

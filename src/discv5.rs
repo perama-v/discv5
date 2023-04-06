@@ -93,6 +93,8 @@ where
     enr_key: Arc<RwLock<CombinedKey>>,
     /// Phantom for the protocol id.
     _phantom: PhantomData<P>,
+    /// Send a tunnel packet right up to the app running discv5.
+    tunnel_recv: Option<mpsc::Receiver<InboundTunnelPacket>>,
 }
 
 impl<P: ProtocolIdentity> Discv5<P> {
@@ -144,6 +146,7 @@ impl<P: ProtocolIdentity> Discv5<P> {
             local_enr,
             enr_key,
             _phantom: Default::default(),
+            tunnel_recv: None,
         })
     }
 
@@ -154,6 +157,7 @@ impl<P: ProtocolIdentity> Discv5<P> {
             return Err(Discv5Error::ServiceAlreadyStarted);
         }
 
+        let (tunnel_send, tunnel_recv) = mpsc::channel::<InboundTunnelPacket>(30);
         // create the main service
         let (service_exit, service_channel) = Service::spawn::<P>(
             self.local_enr.clone(),
@@ -161,10 +165,12 @@ impl<P: ProtocolIdentity> Discv5<P> {
             self.kbuckets.clone(),
             self.config.clone(),
             listen_socket,
+            tunnel_send,
         )
         .await?;
         self.service_exit = Some(service_exit);
         self.service_channel = Some(service_channel);
+        self.tunnel_recv = Some(tunnel_recv);
         Ok(())
     }
 
@@ -507,16 +513,29 @@ impl<P: ProtocolIdentity> Discv5<P> {
         }
     }
 
+    /// Receive a tunnel packet through discv5 socket if any have arrived.
+    pub fn recv_tunnel_packet(
+        &self,
+    ) -> impl Future<Output = Option<InboundTunnelPacket>> + 'static {
+        async move {
+            let Some(rx) = self.tunnel_recv.as_deref_mut() else {
+                return None
+            };
+            let tunnel_packet = rx.recv().await;
+            tunnel_packet
+        }
+    }
+
     /// Send a tunnel packet through discv5 socket.
     pub fn tunnel_packet(
         &self,
-        packet: OutboundTunnelPacket,
+        outbound: OutboundTunnelPacket,
     ) -> impl Future<Output = Result<(), RequestError>> + 'static {
         let channel = self.clone_channel();
 
         async move {
             let channel = channel.map_err(|_| RequestError::ServiceNotStarted)?;
-            let event = ServiceRequest::TunnelPacket(packet);
+            let event = ServiceRequest::TunnelPacket(outbound);
 
             // send the request
             channel

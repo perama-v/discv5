@@ -33,7 +33,7 @@ use crate::{
     packet::{ChallengeData, IdNonce, MessageNonce, Packet, PacketKind, ProtocolIdentity},
     rpc::{Message, Request, RequestBody, RequestId, Response, ResponseBody},
     socket,
-    socket::{FilterConfig, Inbound, Outbound, Socket},
+    socket::{FilterConfig, Outbound, Socket},
     Enr,
 };
 use delay_map::HashMapDelay;
@@ -132,9 +132,6 @@ pub enum HandlerOut {
     ///
     /// This returns the request ID and an error indicating why the request failed.
     RequestFailed(RequestId, RequestError),
-
-    /// An inbound tunnel packet to be sent up to the app running discv5.
-    TunnelPacket(InboundTunnelPacket),
 }
 
 /// How we connected to the node.
@@ -222,6 +219,7 @@ impl Handler {
         key: Arc<RwLock<CombinedKey>>,
         listen_socket: SocketAddr,
         config: Discv5Config,
+        tunnel_send: mpsc::Sender<InboundTunnelPacket>,
     ) -> Result<HandlerReturn, std::io::Error> {
         let (exit_sender, exit) = oneshot::channel();
         // create the channels to send/receive messages from the application
@@ -256,7 +254,7 @@ impl Handler {
         };
 
         // Attempt to bind to the socket before spinning up the send/recv tasks.
-        let socket = Socket::new::<P>(socket_config).await?;
+        let socket = Socket::new::<P>(socket_config, tunnel_send).await?;
 
         config
             .executor
@@ -316,14 +314,7 @@ impl Handler {
                     }
                 }
                 Some(inbound_packet) = self.socket.recv.recv() => {
-                    match inbound_packet {
-                        Inbound::Packet(inbound) =>  self.process_inbound_packet::<P>(inbound).await,
-                        Inbound::TunnelPacket(inbound) => {
-                            if let Err(e) = self.service_send.send(HandlerOut::TunnelPacket(inbound)).await {
-                                warn!("Failed to send tunnel packet up to service, {}", e)
-                            }
-                        }
-                    }
+                    self.process_inbound_packet::<P>(inbound_packet).await
                 }
                 Some(Ok((node_address, pending_request))) = self.active_requests.next() => {
                     self.handle_request_timeout(node_address, pending_request).await;

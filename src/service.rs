@@ -41,7 +41,7 @@ use rpc::*;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, task::Poll, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, trace, warn};
-use tunnel::OutboundTunnelPacket;
+use tunnel::{InboundTunnelPacket, OutboundTunnelPacket};
 
 mod ip_vote;
 mod query_info;
@@ -150,6 +150,7 @@ pub enum ServiceRequest {
     /// Sets up an event stream where the discv5 server will return various events such as
     /// discovered nodes as it traverses the DHT.
     RequestEventStream(oneshot::Sender<mpsc::Receiver<Discv5Event>>),
+    /// Pass a tunnel packet right through to handler and send via discv5 socket.
     TunnelPacket(OutboundTunnelPacket),
 }
 
@@ -253,6 +254,7 @@ impl Service {
         kbuckets: Arc<RwLock<KBucketsTable<NodeId, Enr>>>,
         config: Discv5Config,
         listen_socket: SocketAddr,
+        tunnel_send: mpsc::Sender<InboundTunnelPacket>,
     ) -> Result<(oneshot::Sender<()>, mpsc::Sender<ServiceRequest>), std::io::Error> {
         // process behaviour-level configuration parameters
         let ip_votes = if config.enr_update {
@@ -270,6 +272,7 @@ impl Service {
             enr_key.clone(),
             listen_socket,
             config.clone(),
+            tunnel_send,
         )
         .await?;
 
@@ -387,9 +390,6 @@ impl Service {
                                 warn!("RPC Request failed: id: {}, error {:?}", request_id, error);
                             }
                             self.rpc_failure(request_id, error);
-                        }
-                        HandlerOut::TunnelPacket(inbound) => {
-                            self.send_event(Discv5Event::TunnelPacket(inbound));
                         }
                     }
                 }
