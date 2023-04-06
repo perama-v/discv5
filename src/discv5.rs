@@ -507,7 +507,7 @@ impl<P: ProtocolIdentity> Discv5<P> {
         }
     }
 
-    /// Request a TALK message from a node, identified via the ENR.
+    /// Send a tunnel packet through discv5 socket.
     pub fn tunnel_packet(
         &self,
         packet: OutboundTunnelPacket,
