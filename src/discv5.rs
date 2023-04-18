@@ -32,7 +32,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, warn};
 use tunnel::{InboundTunnelPacket, OutboundTunnelPacket};
 
@@ -94,7 +94,7 @@ where
     /// Phantom for the protocol id.
     _phantom: PhantomData<P>,
     /// Send a tunnel packet right up to the app running discv5.
-    tunnel_recv: Option<mpsc::Receiver<InboundTunnelPacket>>,
+    tunnel_recv: Option<Arc<Mutex<mpsc::Receiver<InboundTunnelPacket>>>>,
 }
 
 impl<P: ProtocolIdentity> Discv5<P> {
@@ -170,7 +170,7 @@ impl<P: ProtocolIdentity> Discv5<P> {
         .await?;
         self.service_exit = Some(service_exit);
         self.service_channel = Some(service_channel);
-        self.tunnel_recv = Some(tunnel_recv);
+        self.tunnel_recv = Some(Arc::new(Mutex::new(tunnel_recv)));
         Ok(())
     }
 
@@ -514,14 +514,12 @@ impl<P: ProtocolIdentity> Discv5<P> {
     }
 
     /// Receive a tunnel packet through discv5 socket if any have arrived.
-    pub fn recv_tunnel_packet(
-        &self,
-    ) -> impl Future<Output = Option<InboundTunnelPacket>> + 'static {
+    pub fn recv_tunnel_packet(&self) -> impl Future<Output = Option<InboundTunnelPacket>> + '_ {
         async move {
-            let Some(rx) = self.tunnel_recv.as_deref_mut() else {
+            let Some(rx) = self.tunnel_recv.clone() else {
                 return None
             };
-            let tunnel_packet = rx.recv().await;
+            let tunnel_packet = rx.lock().await.recv().await;
             tunnel_packet
         }
     }
