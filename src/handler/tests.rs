@@ -47,21 +47,24 @@ async fn simple_session_message() {
         .udp4(receiver_port)
         .build(&key2)
         .unwrap();
-
+    let (tunnel_send, _tunnel_recv) = mpsc::channel::<InboundTunnelPacket>(30);
     let (_exit_send, sender_send, _sender_recv) = Handler::spawn::<DefaultProtocolId>(
         arc_rw!(sender_enr.clone()),
         arc_rw!(key1),
         sender_enr.udp4_socket().unwrap().into(),
         config.clone(),
+        tunnel_send,
     )
     .await
     .unwrap();
 
+    let (tunnel_send, _tunnel_recv) = mpsc::channel::<InboundTunnelPacket>(30);
     let (_exit_recv, recv_send, mut receiver_recv) = Handler::spawn::<DefaultProtocolId>(
         arc_rw!(receiver_enr.clone()),
         arc_rw!(key2),
         receiver_enr.udp4_socket().unwrap().into(),
         config,
+        tunnel_send,
     )
     .await
     .unwrap();
@@ -124,21 +127,25 @@ async fn multiple_messages() {
         .build(&key2)
         .unwrap();
 
+    let (tunnel_send, _tunnel_recv) = mpsc::channel::<InboundTunnelPacket>(30);
     let (_exit_send, sender_handler, mut sender_handler_recv) =
         Handler::spawn::<DefaultProtocolId>(
             arc_rw!(sender_enr.clone()),
             arc_rw!(key1),
             sender_enr.udp4_socket().unwrap().into(),
             config.clone(),
+            tunnel_send,
         )
         .await
         .unwrap();
 
+    let (tunnel_send, _tunnel_recv) = mpsc::channel::<InboundTunnelPacket>(30);
     let (_exit_recv, recv_send, mut receiver_handler) = Handler::spawn::<DefaultProtocolId>(
         arc_rw!(receiver_enr.clone()),
         arc_rw!(key2),
         receiver_enr.udp4_socket().unwrap().into(),
         config,
+        tunnel_send,
     )
     .await
     .unwrap();

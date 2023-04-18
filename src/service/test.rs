@@ -16,7 +16,10 @@ use crate::{
 use enr::{CombinedKey, EnrBuilder};
 use parking_lot::RwLock;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{
+    mpsc::{self, Sender},
+    oneshot,
+};
 
 fn _connected_state() -> NodeStatus {
     NodeStatus {
@@ -43,16 +46,19 @@ async fn build_service<P: ProtocolIdentity>(
     enr_key: Arc<RwLock<CombinedKey>>,
     listen_socket: SocketAddr,
     filters: bool,
+    tunnel_send: Sender<InboundTunnelPacket>,
 ) -> Service {
     let config = Discv5ConfigBuilder::new()
         .executor(Box::<crate::executor::TokioExecutor>::default())
         .build();
+
     // build the session service
     let (_handler_exit, handler_send, handler_recv) = Handler::spawn::<P>(
         local_enr.clone(),
         enr_key.clone(),
         listen_socket,
         config.clone(),
+        tunnel_send,
     )
     .await
     .unwrap();
@@ -116,12 +122,14 @@ async fn test_updating_connection_on_ping() {
         .unwrap();
 
     let socket_addr = enr.udp4_socket().unwrap();
+    let (tunnel_send, _tunnel_recv) = mpsc::channel::<InboundTunnelPacket>(30);
 
     let mut service = build_service::<DefaultProtocolId>(
         Arc::new(RwLock::new(enr)),
         Arc::new(RwLock::new(enr_key1)),
         socket_addr.into(),
         false,
+        tunnel_send,
     )
     .await;
     // Set up service with one disconnected node
