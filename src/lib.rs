@@ -136,3 +136,5 @@ pub use service::TalkRequest;
 pub use socket::{RateLimiter, RateLimiterBuilder};
 // re-export the ENR crate
 pub use enr;
+// re-export from tunnel crate
+pub use tunnel::{TunnelPacket, InboundTunnelPacket, OutboundTunnelPacket};
