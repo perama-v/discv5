@@ -535,7 +535,6 @@ impl Handler {
 
         if self.active_challenges.get(&node_address).is_some() {
             warn!("WHOAREYOU already sent. {}", node_address);
-            return;
         }
 
         // NOTE: We do not check if we have an active session here. This was checked before
